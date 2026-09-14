@@ -1,8 +1,10 @@
 #include "windows.h"
+#include "appexport.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
@@ -18,6 +20,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProgressDialog>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -25,11 +28,17 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
+#include <QThread>
 #include <QVBoxLayout>
 
 namespace cp {
 namespace {
 const QString panelFilter = "Control panels (*.controlpanel *.xml);;All files (*)";
+class ExportProgressDialog : public QProgressDialog {
+public:
+    using QProgressDialog::QProgressDialog;
+    void reject() override {} // Escape must not dismiss an export that is still saving/signing.
+};
 QLabel *label(const QString &text) {
     auto *widget = new QLabel(text);
     widget->setTextFormat(Qt::PlainText); widget->setWordWrap(true); return widget;
@@ -55,71 +64,28 @@ QWidget *propertyPage(QFormLayout **form) {
 }
 }
 
-void configureAppearance() {
-    qApp->setStyleSheet("QLineEdit, QComboBox { min-height: 26px; } QToolBar { spacing: 8px; padding: 8px; } "
-                       "QTreeWidget { border: none; } QTreeWidget::item { padding: 7px 3px; } "
-                       "QStatusBar { min-height: 24px; } "
-                       "QTabBar::tab { padding: 9px 15px; color: palette(window-text); background: palette(button); "
-                       "border: 1px solid palette(mid); border-bottom: 2px solid transparent; } "
-                       "QTabBar::tab:selected { border-bottom: 2px solid palette(highlight); }");
-}
-
-InterpreterWindow::InterpreterWindow(QWidget *parent) : QMainWindow(parent) {
-    resize(800, 580); setMinimumSize(340, 300);
-    setWindowTitle("ControlPanel Interpreter");
-    view = new PanelView(false); setCentralWidget(view);
-    view->setPanel({"ControlPanel Interpreter", {{"Welcome", {}}}});
-    runner = new ActionRunner(this);
-    auto *file = menuBar()->addMenu("&File");
-    menuAction(file, "&Open Panel…", QKeySequence::Open, [this] {
+InterpreterWindow::InterpreterWindow(QWidget *parent)
+    : RuntimeWindow({"ControlPanel Interpreter", {{"Welcome", {}}}}, QDir::homePath(), false, parent) {
+    auto *file = findChild<QMenu *>("runtimeFileMenu");
+    auto *open = new QAction("&Open Panel…", file); open->setShortcut(QKeySequence::Open);
+    auto *reload = new QAction("&Reload Panel", file); reload->setShortcut(QKeySequence("Ctrl+R"));
+    file->insertAction(file->actions().first(), reload); file->insertAction(reload, open);
+    connect(open, &QAction::triggered, this, [this] {
         const auto path = QFileDialog::getOpenFileName(this, "Open a control panel", filePath, panelFilter);
         if (!path.isEmpty()) openFile(path);
     });
-    menuAction(file, "&Reload Panel", QKeySequence("Ctrl+R"), [this] { if (!filePath.isEmpty()) openFile(filePath); });
-    file->addSeparator();
-    menuAction(file, "&Close", QKeySequence::Close, [this] { close(); });
-    menuAction(file, "&Quit", QKeySequence::Quit, [this] { close(); });
-    auto *dock = new QDockWidget("Activity", this);
-    dock->setObjectName("activityDock");
-    activity = new QPlainTextEdit; activity->setReadOnly(true); activity->setMaximumBlockCount(500);
-    activity->setObjectName("activityLog");
-    dock->setWidget(activity); addDockWidget(Qt::BottomDockWidgetArea, dock); dock->hide();
-    auto *viewMenu = menuBar()->addMenu("&View"); viewMenu->addAction(dock->toggleViewAction());
-    auto *actionsMenu = menuBar()->addMenu("&Actions");
-    menuAction(actionsMenu, "Stop Running Actions…", {}, [this] {
-        if (runner->activeCount() == 0) { statusBar()->showMessage("No actions are running.", 5000); return; }
-        if (QMessageBox::question(this, "Stop running actions?", "Stop the programs launched by this panel? Any work in progress in those programs may be interrupted.", QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) runner->stopAll();
-    });
-    menuAction(menuBar()->addMenu("&Help"), "About ControlPanel", {}, [this] { about(this); });
-    connect(view, &PanelView::activated, this, [this](const Button &button) {
-        runner->execute(button, QFileInfo(filePath).absolutePath());
-    });
-    connect(runner, &ActionRunner::started, this, [this](const QString &name) { statusBar()->showMessage("Running “" + name + "”…"); });
-    connect(runner, &ActionRunner::finished, this, [this, dock](const QString &name, bool ok, const QString &message) {
-        const auto title = (ok ? "Completed: " : "Failed: ") + name;
-        activity->appendPlainText(QDateTime::currentDateTime().toString("HH:mm:ss") + "  " + title + "\n" + message + "\n");
-        statusBar()->showMessage(title + " — " + message.section('\n', 0, 0), 15000);
-        if (!ok) dock->show();
-    });
+    connect(reload, &QAction::triggered, this, [this] { if (!filePath.isEmpty()) openFile(filePath); });
     statusBar()->showMessage("Open a .controlpanel or XML file to begin. Only open panels you trust.");
 }
 
 bool InterpreterWindow::openFile(const QString &path) {
     Panel candidate; QString error;
-    if (!loadPanel(path, &candidate, &error)) { errorDialog(this, "Could not open panel", error); return false; }
+    if (!loadPanelForEditing(path, &candidate, &error)) { errorDialog(this, "Could not open panel", error); return false; }
     filePath = QFileInfo(path).absoluteFilePath();
-    view->setPanel(candidate);
-    setWindowTitle(candidate.name);
+    showPanel(candidate, QFileInfo(filePath).absolutePath());
     setWindowFilePath(filePath);
     statusBar()->showMessage("Loaded " + QFileInfo(path).fileName() + ". Click a control to run its action.");
     return true;
-}
-
-void InterpreterWindow::closeEvent(QCloseEvent *event) {
-    if (runner->activeCount() > 0) {
-        errorDialog(this, "Actions are still running", "Wait for the running actions to finish, or use Actions → Stop Running Actions before closing. Their output is available in View → Activity.");
-        event->ignore();
-    } else event->accept();
 }
 
 CreatorWindow::CreatorWindow(QWidget *parent) : QMainWindow(parent), panel(newPanel()) {
@@ -137,6 +103,9 @@ CreatorWindow::CreatorWindow(QWidget *parent) : QMainWindow(parent), panel(newPa
     auto *saveAction = menuAction(file, "&Save", QKeySequence::Save, [this] { save(); });
     menuAction(file, "Save &As…", QKeySequence::SaveAs, [this] { save(true); });
     auto *exportAction = menuAction(file, "&Export for Interpreter…", QKeySequence("Ctrl+E"), [this] { save(true); });
+    menuAction(file, "App Export Settings…", {}, [this] { appExportSettings(); });
+    auto *appExportAction = menuAction(file, "Export &App…", QKeySequence("Ctrl+Shift+E"), [this] { exportApp(); });
+    appExportAction->setObjectName("exportAppAction");
     file->addSeparator(); menuAction(file, "&Close", QKeySequence::Close, [this] { close(); });
     menuAction(file, "&Quit", QKeySequence::Quit, [this] { close(); });
     auto *viewMenu = menuBar()->addMenu("&View");
@@ -145,6 +114,7 @@ CreatorWindow::CreatorWindow(QWidget *parent) : QMainWindow(parent), panel(newPa
     auto *toolbar = addToolBar("Document"); toolbar->setMovable(false);
     toolbar->addAction(newAction); toolbar->addAction(openAction); toolbar->addAction(saveAction);
     toolbar->addSeparator(); toolbar->addAction(previewAction); toolbar->addAction(exportAction);
+    toolbar->addAction(appExportAction);
 
     auto *splitter = new QSplitter; setCentralWidget(splitter);
     auto *sidebar = new QWidget; sidebar->setMinimumWidth(185);
@@ -169,6 +139,9 @@ CreatorWindow::CreatorWindow(QWidget *parent) : QMainWindow(parent), panel(newPa
     editorLayout->addWidget(label("PANEL NAME"));
     panelName = new QLineEdit(panel.name); panelName->setObjectName("panelName"); panelName->setAccessibleName("Panel name");
     editorLayout->addWidget(panelName);
+    auto *exportSettings = new QPushButton("App Export Settings…"); exportSettings->setObjectName("appExportSettings");
+    editorLayout->addWidget(exportSettings);
+    connect(exportSettings, &QPushButton::clicked, this, &CreatorWindow::appExportSettings);
     properties = new QStackedWidget;
     QFormLayout *tabForm;
     auto *tabPage = propertyPage(&tabForm);
@@ -329,8 +302,8 @@ void CreatorWindow::previewWindow() {
 }
 bool CreatorWindow::openFile(const QString &path) {
     Panel candidate; QString error;
-    if (!loadPanel(path, &candidate, &error)) { errorDialog(this, "Could not open panel", error); return false; }
     if (!maybeSave()) return false;
+    if (!loadPanelForEditing(path, &candidate, &error)) { errorDialog(this, "Could not open panel", error); return false; }
     panel = candidate; filePath = QFileInfo(path).absoluteFilePath(); dirty = false;
     panelName->setText(panel.name); rebuildTree(0); refreshPreview(); updateTitle(); return true;
 }
@@ -355,6 +328,83 @@ bool CreatorWindow::maybeSave() {
     if (answer == QMessageBox::Save) return save();
     return answer == QMessageBox::Discard;
 }
+void CreatorWindow::appExportSettings() {
+    QDialog dialog(this); dialog.setObjectName("appExportSettingsDialog");
+    dialog.setWindowTitle("App Export Settings"); dialog.resize(560, 550);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(label("Export a self-contained app named “" + panel.name + "”. These settings are saved in the panel file."));
+    auto *form = new QFormLayout; form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    auto *version = new QLineEdit(panel.appExport.version); version->setObjectName("appVersion");
+    version->setPlaceholderText("Optional, for example 1.0.0"); form->addRow("Version for next export", version);
+    auto *increment = new QCheckBox("Advance version after each successful export"); increment->setObjectName("appAutoIncrement");
+    increment->setChecked(panel.appExport.autoIncrement); form->addRow(increment);
+    auto *iconRow = new QWidget; auto *iconLayout = new QHBoxLayout(iconRow); iconLayout->setContentsMargins(0, 0, 0, 0);
+    iconRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto *icon = new QLineEdit(panel.appExport.iconPath); icon->setObjectName("appIcon"); icon->setPlaceholderText("Built-in icon");
+    auto *browse = new QPushButton("Choose…"); iconLayout->addWidget(icon, 1); iconLayout->addWidget(browse);
+    form->addRow("App icon", iconRow);
+    connect(browse, &QPushButton::clicked, &dialog, [&] {
+        const auto selected = QFileDialog::getOpenFileName(&dialog, "Choose an app icon", icon->text(), "App icons and images (*.icns *.png *.jpg *.jpeg)");
+        if (!selected.isEmpty()) icon->setText(selected);
+    });
+    auto *contact = new QPlainTextEdit(panel.appExport.contact); contact->setObjectName("appContact");
+    contact->setPlaceholderText("Team or person, email, phone, or support instructions"); contact->setMaximumHeight(90);
+    form->addRow("Support contact (optional)", contact);
+    auto *description = new QPlainTextEdit(panel.appExport.description); description->setObjectName("appDescription");
+    description->setPlaceholderText("Optional version notes, copyright, or other About information"); description->setMaximumHeight(85);
+    form->addRow("About information (optional)", description);
+    auto *identity = new QComboBox; identity->setObjectName("appSigningIdentity");
+    for (const auto &entry : localSigningIdentities()) identity->addItem(entry.first, entry.second);
+    int selected = identity->findData(panel.appExport.signingIdentity);
+    if (selected < 0) { identity->addItem("Saved certificate (not available on this Mac)", panel.appExport.signingIdentity); selected = identity->count() - 1; }
+    identity->setCurrentIndex(selected); form->addRow("Signing", identity);
+    auto *uuid = new QLineEdit(panel.uuid); uuid->setReadOnly(true); uuid->setObjectName("panelUuid");
+    form->addRow("Panel ID (UUID)", uuid);
+    layout->addLayout(form);
+    layout->addWidget(label("End users can find the version, panel ID, and contact under Help / Support and copy them into a report. Apps contain one fixed panel and have no import or editing controls. Action programs and files stay at their configured paths."));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel); layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        Panel candidate = panel;
+        candidate.appExport = {version->text().trimmed(), increment->isChecked(), icon->text(),
+            contact->toPlainText(), description->toPlainText(), identity->currentData().toString()};
+        // Export settings may be authored before the panel itself is complete.
+        Panel validationPanel = newPanel(); validationPanel.appExport = candidate.appExport;
+        const auto error = validate(validationPanel);
+        if (!error.isEmpty()) { errorDialog(&dialog, "Check app export settings", error); return; }
+        panel.appExport = candidate.appExport; changed(); dialog.accept();
+    });
+    dialog.exec();
+}
+
+void CreatorWindow::exportApp() {
+    if (!save()) return; // Establish the panel UUID and action base directory on disk.
+    const auto destination = QFileDialog::getSaveFileName(this, "Export control panel app",
+        QFileInfo(filePath).absolutePath() + "/" + appFileName(panel.name), "Application (*.app)");
+    if (destination.isEmpty()) return;
+    const auto target = destination.endsWith(".app", Qt::CaseInsensitive) ? destination : destination + ".app";
+    Panel exported = panel; QString error; bool success = false;
+    const auto templatePath = appExportTemplatePath();
+    const auto source = filePath;
+    ExportProgressDialog progress("Building and signing “" + panel.name + "”…", QString(), 0, 0, this);
+    progress.setWindowTitle("Export App"); progress.setWindowModality(Qt::ApplicationModal);
+    progress.setCancelButton(nullptr); progress.setMinimumDuration(0);
+    progress.setWindowFlag(Qt::WindowCloseButtonHint, false);
+    auto *worker = QThread::create([&] { success = exportPanelApp(&exported, source, target, templatePath, &error); });
+    connect(worker, &QThread::finished, &progress, &QDialog::accept);
+    QTimer::singleShot(0, &progress, [worker] { worker->start(); });
+    progress.exec(); worker->wait(); delete worker;
+    if (!success) { errorDialog(this, "Could not export app", error); return; }
+    const auto version = panel.appExport.version;
+    panel = exported; dirty = false; updateTitle();
+    statusBar()->showMessage("Exported " + target);
+    QMessageBox box(QMessageBox::Information, "App exported", "Created " + target
+        + (version.isEmpty() ? QString() : "\nApp version: " + version)
+        + "\nPanel ID: " + panel.uuid
+        + (panel.appExport.autoIncrement && !version.isEmpty() ? "\nNext export version: " + panel.appExport.version : QString()), QMessageBox::Ok, this);
+    box.setTextFormat(Qt::PlainText); box.exec();
+}
+
 void CreatorWindow::updateTitle() {
     setWindowTitle((filePath.isEmpty() ? "Untitled" : QFileInfo(filePath).fileName()) + "[*] — ControlPanel Creator");
     setWindowModified(dirty); setWindowFilePath(filePath);

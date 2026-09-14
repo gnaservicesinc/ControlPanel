@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(ControlPanel VERSION 1.0.0 LANGUAGES CXX)
+if(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        message(FATAL_ERROR "ControlPanel targets Apple Silicon (arm64) only.")
+    endif()
+    set(CMAKE_OSX_ARCHITECTURES arm64)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,17 +13,35 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
 
-add_library(controlpanel STATIC
+add_library(controlpanel_runtime STATIC
     src/model.cpp src/model.h
     src/actions.cpp src/actions.h
     src/panelview.cpp src/panelview.h
-    src/windows.cpp src/windows.h
     src/application.cpp src/application.h
+    src/runtimewindow.cpp src/runtimewindow.h
+    src/embedded.cpp src/embedded.h
+    src/signature.cpp
 )
-target_link_libraries(controlpanel PUBLIC Qt6::Widgets)
-target_include_directories(controlpanel PUBLIC src)
-target_compile_definitions(controlpanel PUBLIC CP_VERSION="${PROJECT_VERSION}")
+target_link_libraries(controlpanel_runtime PUBLIC Qt6::Widgets)
+target_include_directories(controlpanel_runtime PUBLIC src)
+target_compile_definitions(controlpanel_runtime PUBLIC CP_VERSION="${PROJECT_VERSION}")
+target_compile_options(controlpanel_runtime PRIVATE -Wall -Wextra -Wpedantic)
+if(APPLE)
+    target_link_libraries(controlpanel_runtime PUBLIC "-framework Security" "-framework CoreFoundation")
+endif()
+add_library(controlpanel STATIC src/windows.cpp src/windows.h src/appexport.cpp src/appexport.h)
+target_link_libraries(controlpanel PUBLIC controlpanel_runtime)
 target_compile_options(controlpanel PRIVATE -Wall -Wextra -Wpedantic)
+
+if(APPLE)
+    add_executable(ControlPanelRuntime MACOSX_BUNDLE src/standalone_main.cpp src/embedded_slot.cpp)
+    target_link_libraries(ControlPanelRuntime PRIVATE controlpanel_runtime)
+    set_target_properties(ControlPanelRuntime PROPERTIES
+        OUTPUT_NAME "Panel Runtime"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Runtime-Info.plist.in")
+    target_sources(ControlPanelRuntime PRIVATE resources/Interpreter.icns)
+    set_source_files_properties(resources/Interpreter.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+endif()
 
 foreach(app IN ITEMS Interpreter Creator)
     add_executable(ControlPanel${app} MACOSX_BUNDLE src/main.cpp)

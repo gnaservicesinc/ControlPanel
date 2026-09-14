@@ -149,7 +149,14 @@ void PanelView::setPanel(const Panel &panel) {
         const int index = tabs->addTab(scroll, label);
         tabs->setTabToolTip(index, Qt::convertFromPlainText(label));
     }
+    tabs->tabBar()->setVisible(!compact || tabs->count() > 1);
     setCurrentTab(std::clamp(selected, 0, std::max(0, tabs->count() - 1)));
+}
+void PanelView::setCompact(bool enabled) {
+    compact = enabled;
+    heading->setVisible(!compact); summary->setVisible(!compact);
+    layout()->setContentsMargins(compact ? QMargins(0, 0, 0, 0) : QMargins(20, 20, 20, 16));
+    tabs->tabBar()->setVisible(!compact || tabs->count() > 1);
 }
 int PanelView::currentTab() const { return tabs->currentIndex(); }
 void PanelView::setCurrentTab(int index) { tabs->setCurrentIndex(index); }

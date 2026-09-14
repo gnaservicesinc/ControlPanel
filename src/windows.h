@@ -1,6 +1,7 @@
 #pragma once
 #include "actions.h"
 #include "panelview.h"
+#include "runtimewindow.h"
 #include <QMainWindow>
 
 class QComboBox;
@@ -13,17 +14,12 @@ class QPushButton;
 class QStackedWidget;
 
 namespace cp {
-class InterpreterWindow : public QMainWindow {
+class InterpreterWindow : public RuntimeWindow {
     Q_OBJECT
 public:
     explicit InterpreterWindow(QWidget *parent = nullptr);
     bool openFile(const QString &path);
-protected:
-    void closeEvent(QCloseEvent *event) override;
 private:
-    PanelView *view;
-    ActionRunner *runner;
-    QPlainTextEdit *activity;
     QString filePath;
 };
 
@@ -51,6 +47,8 @@ private:
     void moveItem(int delta);
     void previewWindow();
     void updateTitle();
+    void exportApp();
+    void appExportSettings();
     Panel panel;
     QString filePath;
     bool dirty = false;

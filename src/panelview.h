@@ -23,12 +23,14 @@ class PanelView : public QWidget {
 public:
     explicit PanelView(bool preview = false, QWidget *parent = nullptr);
     void setPanel(const Panel &panel);
+    void setCompact(bool compact);
     int currentTab() const;
     void setCurrentTab(int index);
 signals:
     void activated(const cp::Button &button);
 private:
     bool preview;
+    bool compact = false;
     QLabel *heading;
     QLabel *summary;
     QTabWidget *tabs;

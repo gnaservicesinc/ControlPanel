@@ -27,15 +27,19 @@ STAGE="$ROOT/dist/ControlPanel-macos-$ARCH"
 # Only replace our own generated package, never an arbitrary user-selected directory.
 if [ -e "$STAGE" ]; then /bin/rm -rf "$STAGE"; fi
 /bin/mkdir -p "$STAGE"
-for APP in 'ControlPanel Interpreter' 'ControlPanel Creator'; do
+for APP in 'Panel Runtime' 'ControlPanel Interpreter' 'ControlPanel Creator'; do
     /usr/bin/ditto "$BUILD/$APP.app" "$STAGE/$APP.app"
     CONTENTS="$STAGE/$APP.app/Contents"
-    /bin/mkdir -p "$CONTENTS/PlugIns/platforms" "$CONTENTS/PlugIns/styles" "$CONTENTS/Resources/Licenses"
+    /bin/mkdir -p "$CONTENTS/PlugIns/platforms" "$CONTENTS/PlugIns/styles" "$CONTENTS/PlugIns/imageformats" "$CONTENTS/Resources/Licenses"
     /bin/cp "$ROOT/LICENSE" "$CONTENTS/Resources/Licenses/ControlPanel-GPL-3.0.txt"
     /bin/cp "$ROOT/THIRD_PARTY.md" "$CONTENTS/Resources/Licenses/THIRD_PARTY.md"
     if [ -d "$ROOT/resources/licenses" ]; then /usr/bin/ditto "$ROOT/resources/licenses" "$CONTENTS/Resources/Licenses/Qt"; fi
     /bin/cp "$QT_ROOT/plugins/platforms/libqcocoa.dylib" "$CONTENTS/PlugIns/platforms/"
     /bin/cp "$QT_ROOT/plugins/styles/libqmacstyle.dylib" "$CONTENTS/PlugIns/styles/"
+    /bin/cp "$QT_ROOT/plugins/imageformats/libqjpeg.dylib" "$CONTENTS/PlugIns/imageformats/"
+    if [ "$APP" = 'Panel Runtime' ]; then
+        /bin/mv "$CONTENTS/Resources/Interpreter.icns" "$CONTENTS/Resources/PanelIcon.icns"
+    fi
     # This Widgets application needs Cocoa and the native macOS style. Deploy
     # their full dependency closure without unrelated QML/virtual-keyboard plugins.
     cat > "$CONTENTS/Resources/qt.conf" <<'QTCONF'
@@ -45,10 +49,23 @@ Libraries = Frameworks
 QTCONF
     "$QT_ROOT/bin/macdeployqt" "$STAGE/$APP.app" -always-overwrite -verbose=1 -no-plugins -codesign=- \
         "-executable=$CONTENTS/PlugIns/platforms/libqcocoa.dylib" \
-        "-executable=$CONTENTS/PlugIns/styles/libqmacstyle.dylib"
+        "-executable=$CONTENTS/PlugIns/styles/libqmacstyle.dylib" \
+        "-executable=$CONTENTS/PlugIns/imageformats/libqjpeg.dylib"
+    "$CMAKE" "-DAPP_BUNDLE=$STAGE/$APP.app" -P "$ROOT/cmake/ThinBundle.cmake"
+    if [ "$APP" = 'ControlPanel Creator' ]; then
+        /bin/mkdir -p "$CONTENTS/Resources/AppExport"
+        /usr/bin/ditto "$STAGE/Panel Runtime.app" "$CONTENTS/Resources/AppExport/Panel Runtime.app"
+    fi
+    /usr/bin/codesign --force --deep --sign - --timestamp=none "$STAGE/$APP.app"
     "$CMAKE" "-DAPP_BUNDLE=$STAGE/$APP.app" "-DAPP_NAME=$APP" "-DARCH=$ARCH" -P "$ROOT/cmake/VerifyBundle.cmake"
-    "$STAGE/$APP.app/Contents/MacOS/$APP" --validate "$ROOT/examples/Getting Started.controlpanel"
+    if [ "$APP" != 'Panel Runtime' ]; then
+        "$STAGE/$APP.app/Contents/MacOS/$APP" --validate "$ROOT/examples/Getting Started.controlpanel"
+    fi
 done
+# The template ships inside Creator, not as a user-launchable blank application.
+/bin/rm -rf "$STAGE/Panel Runtime.app"
+CP_EXPORT_TEMPLATE="$STAGE/ControlPanel Creator.app/Contents/Resources/AppExport/Panel Runtime.app" \
+    QT_QPA_PLATFORM=offscreen "$BUILD/controlpanel_tests" appExportBundle
 /usr/bin/ditto "$ROOT/examples" "$STAGE/Examples"
 /bin/cp "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/THIRD_PARTY.md" "$STAGE/"
 if [ -d "$QT_ROOT/licenses" ]; then /usr/bin/ditto "$QT_ROOT/licenses" "$STAGE/Qt-Licenses"; fi

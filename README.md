@@ -3,13 +3,13 @@
 Two macOS desktop apps for making and using your own tabbed control panels.
 
 - **Creator:** add, edit, reorder, duplicate, and remove tabs and buttons; choose
-  actions and files; visualize the result; then export XML.
+  actions and files; visualize the result; then export XML or a standalone app.
 - **Interpreter:** load a panel and use its controls. Labels wrap inside an evenly
   spaced grid that adapts to the window width. Large panels scroll vertically.
 
 ## Build and open
 
-Requires macOS 13+, Xcode or its command-line tools, Qt 6.8+ with Widgets and Test,
+Requires Apple Silicon (arm64), macOS 13+, Xcode or its command-line tools, Qt 6.8+ with Widgets and Test,
 and CMake 3.24+. The default Qt path is `/opt/Qt/6.11.2/macos`. CMake is found in
 the Qt installer's Tools directory or `/Applications/CMake.app`.
 
@@ -31,14 +31,14 @@ open "dist/ControlPanel-macos-arm64/ControlPanel Creator.app"
 open "dist/ControlPanel-macos-arm64/ControlPanel Interpreter.app"
 ```
 
-The suffix follows the build architecture: `arm64`, `x86_64`, or `universal`.
+Applications target **arm64 only**. Bundled Qt frameworks and plugins are also
+stripped to arm64; no Intel slices are shipped.
 Copy the **apps from `dist/`** anywhere, including `/Applications`. The apps in
 `build/` are intermediate development builds. Your own action programs/scripts
 and target files remain at the paths you configure; exporting XML does not copy
 those user files into the apps.
 
 ```sh
-./build.sh --arch universal                 # Apple Silicon + Intel
 ./build.sh --qt /path/to/Qt/macos
 ./build.sh --cmake /absolute/path/to/cmake
 ./build.sh --build-dir build-dev --no-package
@@ -62,7 +62,7 @@ Apple system directories; CMake and CTest are invoked by absolute path.
 Bundle verification checks embedded frameworks/plugins, every Mach-O dependency
 and architecture, runtime search paths, minimum OS versions, and signatures. It
 rejects references to build-machine libraries. GitHub Actions builds and uploads
-universal packages using Qt 6.8.3 as the supported baseline.
+arm64 packages using Qt 6.8.3 as the supported baseline.
 
 ## Create a panel
 
@@ -78,6 +78,89 @@ universal packages using Qt 6.8.3 as the supported baseline.
 Creator reopens exported files. It reports invalid fields before saving, saves
 atomically, and prompts about unsaved changes when opening, creating or closing
 a panel. Removing a nonempty tab requires confirmation.
+
+## Export a standalone control panel app
+
+Use the **Creator from `dist/`**, which includes the export runtime and all Qt
+libraries. End users need only the exported `.app` and the internal software/files
+its buttons control. They do not need Creator, Interpreter, Qt, or the panel XML.
+No compilation or Xcode project setup is needed for an export.
+
+1. Name the panel and configure its controls.
+2. Click **App Export Settings…** under the panel name (also in the File menu).
+   Choose an optional ICNS, PNG, or JPEG icon; the version for the next export;
+   optional support contact details; and optional About/version notes.
+3. Leave **Advance version after each successful export** enabled for automatic
+   increments. The default starts at `1.0.0`: the first app contains `1.0.0`, and
+   the XML is then saved with `1.0.1` ready for the next export. Cancelling or
+   failing an export does not advance the version. Disable this to reuse a version.
+4. Choose **Export App…** from the toolbar or File menu. Save the source panel
+   when asked, then choose where to create the app. A previous export from the
+   same panel can be replaced; unrelated apps are preserved.
+5. Open the resulting app. Its name and icon identify the panel, and its controls
+   occupy the main window. There are no open, import, reload, or editor controls;
+   a single tab fills the panel area without a redundant tab selector.
+
+Versions accept one to three dot-separated numbers from 0 to 9999. The last
+component increments, with carry at 9999. An exhausted version must be changed
+or auto-increment disabled. An empty version stays empty and appears as **Not
+set** in support information; macOS bundle metadata uses `1.0.0` as a fallback.
+Export settings, including the selected signing certificate ID, are stored in
+`<appExport>` in the source XML. Keep the selected icon available for re-export;
+its contents are copied into each exported app.
+
+### Support information and panel identity
+
+End users can always click **Help / Support** at the bottom of the window, or
+choose **Help → Support Information…** or **About [panel name]**. This shows the
+app name, its exported version, **Panel ID (UUID)**, support contact, and About
+notes. **Copy Support Information** copies the complete details for pasting into
+an email or issue report. Support uses the version to identify the revision and
+the UUID to identify the source panel, even when different panels have the same name.
+
+Every newly created panel gets a UUID. Creator and Interpreter atomically add
+one to older files on their first successful open; files missing a UUID must be
+writable (or copied to a writable folder first). Read-only `--validate` does not
+modify files. Reopening, renaming, Save As, and exporting preserve the UUID;
+**New Panel** generates a different one. A copy of an existing XML file retains
+its identity, so UUIDs identify the panel lineage, not a unique filesystem path.
+Creator shows the UUID in App Export Settings.
+
+### Packaging and local signing
+
+The dedicated runtime contains a compact CBOR snapshot in a read-only Mach-O
+section of the executable. It decodes that snapshot directly without reading or
+parsing a panel XML file. The runtime is linked separately from the creator and exporter. It has no
+external-panel loading interface, file associations, or Finder open handler.
+
+The exporter signs the completed app with macOS `codesign`, using **Local use
+(ad-hoc signing)** by default. Optionally select a development signing identity
+already installed in the Mac's keychain, including identities set up with Xcode.
+Signing and verification must succeed before publishing the app. The source
+version update must also succeed; otherwise the previous app is restored.
+No Developer ID account, notarization, or external distribution is required.
+Exported apps contain arm64 code only, including their bundled Qt runtime.
+
+On launch the app checks its signature, resources and nested code using Apple's
+[Code Signing Services](https://developer.apple.com/documentation/security/secstaticcodecheckvalidity(_:_:_:)),
+then checks the embedded snapshot's SHA-256 checksum before decoding it. This
+provides tamper detection and barriers to accidental changes, not encryption or
+protection against a machine owner who can patch and re-sign an app. Local
+ad-hoc signing does not establish a publisher identity for another machine.
+These apps are intended for a controlled internal environment.
+
+Relative button paths are resolved to absolute paths at export time. `~/` still
+resolves for the user running the app. The working directory remains the source
+panel folder while it exists, otherwise it falls back to the running user’s home
+folder so absolute programs still work without the authoring folder. Scripts that
+rely on a working directory or relative arguments still need that folder, and
+action targets must remain available. XML deletion has no effect on the panel. Programs, scripts, data files, and arbitrary files mentioned in
+arguments are not bundled or covered by the app signature. Install/manage that
+internal software separately. Buttons continue to run only when clicked.
+
+For support tooling, exported apps accept `--support-info`, `--version`, and
+`--verify`; these verify the embedded app and never run actions. All other
+arguments, including panel filenames and Qt command-line overrides, are rejected.
 
 ## Use a panel
 
@@ -104,6 +187,15 @@ Use `.controlpanel` or `.xml`; both contain UTF-8 XML:
 ```xml
 <ControlPanel>
   <name>My Control Panel</name>
+  <uuid>708726dd-e23d-46c8-aa51-9ae210b304ea</uuid>
+  <appExport>
+    <version>1.0.0</version>
+    <autoIncrement>true</autoIncrement>
+    <iconPath></iconPath>
+    <contact>Internal Help Desk</contact>
+    <description></description>
+    <signingIdentity>-</signingIdentity>
+  </appExport>
   <Tab>
     <name>Counter</name>
     <button>
@@ -120,9 +212,11 @@ Use `.controlpanel` or `.xml`; both contain UTF-8 XML:
 Panel/tab names and button names/actions/paths are required. A panel needs at
 least one named tab; tabs may be empty. Element names are case-sensitive:
 `ControlPanel`, `Tab`, `button`, `name`, `action`, `path`, `args`, `value`, and
-`ToolTip`. Legacy `<Value>` is accepted and exported as `<value>`. Unknown or
+`ToolTip`, `uuid`, and `appExport` (with the fields shown above). Legacy `<Value>` is accepted and exported as `<value>`. Unknown or
 duplicate fields, unsupported actions, attributes, namespaces, DTDs and malformed
-XML are rejected. Limits: 4 MiB, 100 tabs, 2,000 buttons.
+XML are rejected. Older files may omit `uuid` and `appExport`; their defaults
+are added on migration/save. Older ControlPanel versions that do not understand
+these fields cannot open the updated XML. Limits: 4 MiB, 100 tabs, 2,000 buttons.
 
 | Action | Behavior | Optional fields |
 | --- | --- | --- |
@@ -171,7 +265,8 @@ Unrelated programs must cooperate with this lock to avoid concurrent-write races
 
 ## Development
 
-Both apps share a C++17 library for the XML model, action runner and renderer.
+The apps share C++17 libraries for the model, action runner and renderer. The
+standalone runtime links only the runtime library, without creator/exporter UI.
 The ordinary CMake workflow is available too:
 
 ```sh
@@ -193,7 +288,11 @@ Both apps support non-executing command-line validation:
 
 Exit codes: `0` valid, `1` invalid, `2` bad usage. Tests cover XML round trips,
 malformed input, quoting, real process execution/failures/cancellation, counters
-and locks, safe previews, resizing/wrapping, and Creator → Interpreter execution.
+and locks, safe previews, resizing/wrapping, and Creator → Interpreter execution. App-export coverage checks metadata/UUID
+migration, binary decoding, support-info copying, settings UI, version increments,
+real signed bundles, custom icons, filename rejection, failure preservation, and
+tamper rejection. Packaging runs the bundle integration test against its signed
+arm64 runtime.
 For visual review, set `CP_SCREENSHOT_DIR` when running
 `controlpanel_tests renderWindows`. Regenerate the checked-in app icons with
 `./scripts/make-icons.sh` (Xcode Swift/AppKit and Apple `iconutil`).

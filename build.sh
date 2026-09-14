@@ -5,7 +5,7 @@ ROOT="$(cd "$(/usr/bin/dirname "$0")" && /bin/pwd)"
 QT_ROOT="${CONTROLPANEL_QT_ROOT:-/opt/Qt/6.11.2/macos}"
 CMAKE="${CONTROLPANEL_CMAKE:-}"
 BUILD="$ROOT/build"
-ARCH="$(/usr/bin/uname -m)"
+ARCH=arm64
 PACKAGE=1
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -19,14 +19,15 @@ while [ "$#" -gt 0 ]; do
         --no-package) PACKAGE=0; shift;;
         --help|-h)
             echo "Usage: ./build.sh [--qt /path/to/Qt/macos] [--cmake /absolute/path/to/cmake]"
-            echo "                  [--build-dir path] [--arch arm64|x86_64|universal] [--no-package]"
+            echo "                  [--build-dir path] [--arch arm64] [--no-package]"
             echo "Builds both applications, runs tests, and packages self-contained apps in dist/."
             exit 0;;
         *) echo "Unknown option: $1 (see --help)" >&2; exit 2;;
     esac
 done
 if [ "$(/usr/bin/uname -s)" != Darwin ]; then echo "This helper requires macOS. See README.md for plain CMake builds." >&2; exit 1; fi
-case "$ARCH" in arm64|x86_64) CMAKE_ARCH="$ARCH";; universal) CMAKE_ARCH='arm64;x86_64';; *) echo "Unsupported architecture: $ARCH" >&2; exit 2;; esac
+if [ "$ARCH" != arm64 ]; then echo "ControlPanel targets Apple Silicon (arm64) only." >&2; exit 2; fi
+CMAKE_ARCH=arm64
 if [ -z "$CMAKE" ]; then
     for candidate in /opt/Qt/Tools/CMake/CMake.app/Contents/bin/cmake /Applications/CMake.app/Contents/bin/cmake; do
         if [ -x "$candidate" ]; then CMAKE="$candidate"; break; fi

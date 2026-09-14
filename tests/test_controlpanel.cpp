@@ -2,20 +2,31 @@
 #include "model.h"
 #include "panelview.h"
 #include "windows.h"
+#include "appexport.h"
 
 #include <QComboBox>
+#include <QAction>
+#include <QApplication>
+#include <QClipboard>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QCheckBox>
 #include <QDir>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLockFile>
 #include <QPlainTextEdit>
+#include <QProcess>
+#include <QImage>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeWidget>
+#include <QTabBar>
+#include <QTimer>
 
 using namespace cp;
 namespace {
@@ -71,6 +82,177 @@ private slots:
         Panel panel; QString error; QVERIFY(parseXml(xml, &panel, &error)); QCOMPARE(panel.tabs[2].buttons[0].value, "-0.5");
         QVERIFY(!parseXml(QByteArray(4 * 1024 * 1024 + 1, ' '), &panel, &error));
         panel = sample(); panel.tabs[0].buttons[0].name += QChar(1); QVERIFY(!validate(panel).isEmpty());
+    }
+    void uuidAndExportMetadata() {
+        const auto first = newPanel(); const auto second = newPanel();
+        QVERIFY(!QUuid(first.uuid).isNull()); QVERIFY(first.uuid != second.uuid);
+        auto original = sample();
+        original.appExport = {"4.12.9", false, "icons/custom & icon.png", "Help Desk\nsupport@example.test", "Build <internal> & QA", "-"};
+        QString error; Panel loaded;
+        QVERIFY2(parseXml(toXml(original), &loaded, &error), qPrintable(error));
+        QCOMPARE(toXml(loaded), toXml(original)); QCOMPARE(loaded.uuid, original.uuid);
+        const QByteArray legacy("<ControlPanel><name>Old panel</name><Tab><name>Controls</name></Tab></ControlPanel>");
+        QTemporaryDir dir; const auto path = dir.filePath("legacy.controlpanel"); QVERIFY(write(path, legacy));
+        bool missing = false;
+        QVERIFY(loadPanel(path, &loaded, &error, &missing)); QVERIFY(missing);
+        QCOMPARE(read(path), legacy); // Validation and read-only inspection never rewrite inputs.
+        QVERIFY2(loadPanelForEditing(path, &loaded, &error), qPrintable(error));
+        const auto id = loaded.uuid; QVERIFY(read(path).contains(id.toUtf8()));
+        QVERIFY(loadPanelForEditing(path, &loaded, &error)); QCOMPARE(loaded.uuid, id);
+        CreatorWindow creator; QVERIFY(creator.openFile(path)); QCOMPARE(creator.document().uuid, id);
+        QVERIFY(creator.saveTo(dir.filePath("renamed.controlpanel"))); QCOMPARE(creator.document().uuid, id);
+        for (const auto &field : {QByteArray("<uuid>invalid</uuid>"),
+                                 QByteArray("<uuid>00000000-0000-0000-0000-000000000000</uuid>"),
+                                 QByteArray("<uuid>" + id.toUtf8() + "</uuid><uuid>" + id.toUtf8() + "</uuid>"),
+                                 QByteArray("<appExport><version>1.2-beta</version></appExport>"),
+                                 QByteArray("<appExport><autoIncrement>yes</autoIncrement></appExport>"),
+                                 QByteArray("<appExport><contact>A</contact><contact>B</contact></appExport>"),
+                                 QByteArray("<appExport><unknown/></appExport>"),
+                                 QByteArray("<appExport/><appExport/>"),
+                                 QByteArray("<appExport><version format='x'>1</version></appExport>")}) {
+            auto xml = legacy; xml.replace("</ControlPanel>", field + "</ControlPanel>");
+            QVERIFY2(!parseXml(xml, &loaded, &error), field.constData());
+        }
+    }
+    void appVersionsAndNames() {
+        QCOMPARE(nextExportVersion("1.0.0"), "1.0.1"); QCOMPARE(nextExportVersion("1"), "2");
+        QCOMPARE(nextExportVersion("1.9"), "1.10"); QCOMPARE(nextExportVersion("1.9999"), "2.0");
+        QCOMPARE(nextExportVersion("1.9999.9999"), "2.0.0"); QVERIFY(nextExportVersion("9999.9999.9999").isEmpty());
+        QVERIFY(nextExportVersion({}).isEmpty());
+        for (const auto &version : {"1.2.3.4", "-1", "01", "1.", "1.10000", "beta"}) {
+            auto panel = sample(); panel.appExport.version = version; QVERIFY(!validate(panel).isEmpty());
+        }
+        QCOMPARE(appFileName("...A/B:C\\D"), "A-B-C-D.app");
+        QVERIFY(appFileName(QString(500, QChar(0x754c))).toUtf8().size() <= 184);
+    }
+    void embeddedPanelRoundTrip() {
+        auto original = sample(); original.name = "Control <panel> & support";
+        original.appExport = {"3.2.1", true, "private/source/icon.png", "Help Desk\n123-456", "Internal release", "-"};
+        QString error; const auto payload = encodeEmbeddedPanel(original, "/opt/internal", &error);
+        QVERIFY2(!payload.isEmpty(), qPrintable(error)); QVERIFY(!payload.contains("<ControlPanel>"));
+        QVERIFY(!payload.contains("private/source/icon.png"));
+        EmbeddedPanel decoded;
+        QVERIFY2(decodeEmbeddedPanel(payload, &decoded, &error), qPrintable(error));
+        QCOMPARE(decoded.panel.uuid, original.uuid); QCOMPARE(decoded.panel.name, original.name);
+        QCOMPARE(decoded.panel.appExport.version, "3.2.1"); QCOMPARE(decoded.workingDirectory, "/opt/internal");
+        QCOMPARE(decoded.panel.tabs[0].buttons[0].path, "/opt/internal/marker");
+        QCOMPARE(decoded.panel.tabs[1].buttons[0].args, original.tabs[1].buttons[0].args);
+        QVERIFY(supportInformation(decoded.panel).contains(original.uuid));
+        QVERIFY(supportInformation(decoded.panel).contains("Version: 3.2.1"));
+        for (const auto &bad : {payload.left(payload.size() - 1), payload + "trailing", QByteArray("invalid")})
+            QVERIFY(!decodeEmbeddedPanel(bad, &decoded, &error));
+        QVERIFY(encodeEmbeddedPanel(original, "relative", &error).isEmpty());
+        const QByteArray blank(embeddedSlotSize, 0); QVERIFY(!readEmbeddedSlot(blank.constData(), &decoded, &error));
+    }
+    void standaloneWithoutSourceDirectory() {
+        QTemporaryDir dir;
+        auto panel = newPanel();
+        panel.tabs[0].buttons = {{"Create marker", Action::Touch, dir.filePath("marker"), {}, {}, {}}};
+        RuntimeWindow window(panel, dir.filePath("deleted-authoring-directory")); window.show();
+        QTest::mouseClick(window.findChild<PanelButton *>(), Qt::LeftButton);
+        QTRY_VERIFY(QFile::exists(dir.filePath("marker")));
+    }
+    void standaloneSupportAndControls() {
+        auto panel = sample(); panel.tabs = {panel.tabs[0]}; panel.appExport.contact = "Internal Help Desk";
+        RuntimeWindow window(panel, QDir::tempPath()); window.show(); QTest::qWait(30);
+        QCOMPARE(window.windowTitle(), panel.name);
+        for (const auto *action : window.findChildren<QAction *>()) {
+            QVERIFY(!action->text().contains("Open")); QVERIFY(!action->text().contains("Import"));
+            QVERIFY(!action->text().contains("Reload")); QVERIFY(!action->text().contains("Export"));
+        }
+        QVERIFY(!window.findChild<QTabBar *>()->isVisible());
+        bool copied = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<QDialog *>("supportDialog");
+            if (!dialog) return;
+            const auto details = dialog->findChild<QPlainTextEdit *>("supportDetails")->toPlainText();
+            QTest::mouseClick(dialog->findChild<QPushButton *>("copySupportInformation"), Qt::LeftButton);
+            copied = QApplication::clipboard()->text() == details && details.contains(panel.uuid)
+                && details.contains("Version: 1.0.0") && details.contains("Internal Help Desk");
+            const auto destination = qEnvironmentVariable("CP_SCREENSHOT_DIR");
+            if (!destination.isEmpty()) dialog->grab().save(destination + "/support.png");
+            dialog->accept();
+        });
+        QTest::mouseClick(window.findChild<QPushButton *>("supportButton"), Qt::LeftButton);
+        QVERIFY(copied);
+        const auto destination = qEnvironmentVariable("CP_SCREENSHOT_DIR");
+        if (!destination.isEmpty()) window.grab().save(destination + "/standalone.png");
+    }
+    void creatorAppExportSettings() {
+        CreatorWindow creator; creator.show();
+        const auto uuid = creator.document().uuid;
+        bool visited = false;
+        QTimer::singleShot(0, &creator, [&] {
+            auto *dialog = creator.findChild<QDialog *>("appExportSettingsDialog");
+            if (!dialog) return;
+            visited = true;
+            QCOMPARE(dialog->findChild<QLineEdit *>("panelUuid")->text(), uuid);
+            dialog->findChild<QLineEdit *>("appVersion")->setText("5.3.2");
+            dialog->findChild<QCheckBox *>("appAutoIncrement")->setChecked(false);
+            dialog->findChild<QPlainTextEdit *>("appContact")->setPlainText("Operations Support\nsupport@example.test");
+            dialog->findChild<QPlainTextEdit *>("appDescription")->setPlainText("Internal software controls");
+            const auto destination = qEnvironmentVariable("CP_SCREENSHOT_DIR");
+            if (!destination.isEmpty()) dialog->grab().save(destination + "/export-settings.png");
+            QTest::mouseClick(dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save), Qt::LeftButton);
+        });
+        QTest::mouseClick(creator.findChild<QPushButton *>("appExportSettings"), Qt::LeftButton); QVERIFY(visited);
+        QTemporaryDir dir; const auto path = dir.filePath("settings.controlpanel"); QVERIFY(creator.saveTo(path));
+        Panel loaded; QString error; QVERIFY(loadPanel(path, &loaded, &error));
+        QCOMPARE(loaded.uuid, uuid); QCOMPARE(loaded.appExport.version, "5.3.2"); QVERIFY(!loaded.appExport.autoIncrement);
+        QCOMPARE(loaded.appExport.contact, "Operations Support\nsupport@example.test");
+        QCOMPARE(loaded.appExport.description, "Internal software controls");
+    }
+    void appExportBundle() {
+        const auto templatePath = qEnvironmentVariable("CP_EXPORT_TEMPLATE");
+        if (templatePath.isEmpty()) QSKIP("Packaging runs this test with a signed, self-contained runtime template.");
+        QTemporaryDir dir; QVERIFY(dir.isValid());
+        auto panel = sample(); panel.name = "Support & Operations";
+        panel.appExport.version = "2.4.7"; panel.appExport.contact = "Internal Help Desk\nsupport@example.test";
+        QImage icon(100, 80, QImage::Format_ARGB32); icon.fill(QColor("#3164ab"));
+        panel.appExport.iconPath = "custom.png"; QVERIFY(icon.save(dir.filePath("custom.png")));
+        const auto source = dir.filePath("source.controlpanel"); const auto destination = dir.filePath(appFileName(panel.name));
+        QString error; QVERIFY(savePanel(source, panel, &error));
+        const auto originalId = panel.uuid;
+        QVERIFY2(exportPanelApp(&panel, source, destination, templatePath, &error), qPrintable(error));
+        QCOMPARE(panel.appExport.version, "2.4.8"); QCOMPARE(panel.uuid, originalId);
+        Panel saved; QVERIFY(loadPanel(source, &saved, &error)); QCOMPARE(saved.appExport.version, "2.4.8");
+        QVERIFY2(verifyAppSignature(destination, &error), qPrintable(error));
+        const auto plist = read(destination + "/Contents/Info.plist");
+        QVERIFY(plist.contains(originalId.toUtf8())); QVERIFY(plist.contains("2.4.7"));
+        QVERIFY(!plist.contains("CFBundleDocumentTypes")); QVERIFY(!plist.contains("UTExportedTypeDeclarations"));
+        QVERIFY(!QFileInfo::exists(destination + "/Contents/Resources/panel.xml"));
+        QVERIFY(read(destination + "/Contents/Resources/PanelIcon.icns").startsWith("icns"));
+        QProcess process;
+        const auto executable = destination + "/Contents/MacOS/PanelApp";
+        process.start(executable, {"--support-info"}); QVERIFY(process.waitForFinished(30000));
+        const auto output = process.readAllStandardOutput();
+        QCOMPARE(process.exitCode(), 0); QVERIFY(output.contains(originalId.toUtf8())); QVERIFY(output.contains("Version: 2.4.7"));
+        process.start(executable, {source}); QVERIFY(process.waitForFinished(30000)); QCOMPARE(process.exitCode(), 2);
+        process.start(executable, {"-platform", "offscreen"}); QVERIFY(process.waitForFinished(30000)); QCOMPARE(process.exitCode(), 2);
+        auto failed = panel; failed.appExport.iconPath = "missing.png";
+        QVERIFY(savePanel(source, failed, &error)); const auto before = read(source);
+        QVERIFY(!exportPanelApp(&failed, source, destination, templatePath, &error));
+        QCOMPARE(read(source), before); QCOMPARE(failed.appExport.version, "2.4.8");
+        QVERIFY(verifyAppSignature(destination, &error)); QCOMPARE(read(destination + "/Contents/Info.plist"), plist);
+        auto unrelated = panel; unrelated.uuid = newPanel().uuid;
+        QVERIFY(savePanel(source, unrelated, &error));
+        QVERIFY(!exportPanelApp(&unrelated, source, destination, templatePath, &error));
+        QVERIFY(verifyAppSignature(destination, &error));
+        panel.appExport.autoIncrement = false; QVERIFY(savePanel(source, panel, &error));
+        QVERIFY2(exportPanelApp(&panel, source, destination, templatePath, &error), qPrintable(error));
+        QCOMPARE(panel.appExport.version, "2.4.8");
+        // The source XML is not needed at runtime, and cannot override the embedded snapshot.
+        QVERIFY(QFile::remove(source));
+        process.start(executable, {"--verify"}); QVERIFY(process.waitForFinished(30000)); QCOMPARE(process.exitCode(), 0);
+        QVERIFY(write(destination + "/Contents/Info.plist", read(destination + "/Contents/Info.plist") + "\n<!-- changed -->\n"));
+        QVERIFY(!verifyAppSignature(destination, &error));
+        process.start(executable, {"--support-info"}); QVERIFY(process.waitForFinished(30000)); QVERIFY(process.exitCode() != 0);
+        const auto demo = qEnvironmentVariable("CP_EXPORT_DEMO_DIR");
+        if (!demo.isEmpty()) {
+            QVERIFY(QDir().mkpath(demo)); panel.appExport.iconPath.clear();
+            QVERIFY(savePanel(demo + "/Support.controlpanel", panel, &error));
+            QVERIFY2(exportPanelApp(&panel, demo + "/Support.controlpanel", demo + "/Support & Operations.app", templatePath, &error), qPrintable(error));
+        }
     }
     void arguments() {
         QStringList args; QString error;
