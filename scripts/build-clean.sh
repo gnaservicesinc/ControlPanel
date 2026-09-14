@@ -43,7 +43,7 @@ for APP in 'ControlPanel Interpreter' 'ControlPanel Creator'; do
 Plugins = PlugIns
 Libraries = Frameworks
 QTCONF
-    "$QT_ROOT/bin/macdeployqt" "$STAGE/$APP.app" -always-overwrite -verbose=1 -no-plugins \
+    "$QT_ROOT/bin/macdeployqt" "$STAGE/$APP.app" -always-overwrite -verbose=1 -no-plugins -codesign=- \
         "-executable=$CONTENTS/PlugIns/platforms/libqcocoa.dylib" \
         "-executable=$CONTENTS/PlugIns/styles/libqmacstyle.dylib"
     "$CMAKE" "-DAPP_BUNDLE=$STAGE/$APP.app" "-DAPP_NAME=$APP" "-DARCH=$ARCH" -P "$ROOT/cmake/VerifyBundle.cmake"
