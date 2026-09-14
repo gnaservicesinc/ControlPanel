@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ControlPanel>
+    <name>My Control Panel</name>
+    <Tab>
+        <name>Files</name>
+        <button>
+            <name>Create a marker</name>
+            <action>touch</action>
+            <path>~/controlpanel-marker.txt</path>
+            <ToolTip>Create or update controlpanel-marker.txt in your home folder.</ToolTip>
+        </button>
+        <button>
+            <name>Create a second marker with a longer label</name>
+            <action>touch</action>
+            <path>~/controlpanel-second-marker.txt</path>
+            <ToolTip>Long button labels wrap to fit the available space.</ToolTip>
+        </button>
+    </Tab>
+    <Tab>
+        <name>Programs</name>
+        <button>
+            <name>Show the current date</name>
+            <action>run</action>
+            <path>/bin/date</path>
+            <args>"+%A, %B %d at %H:%M"</args>
+            <ToolTip>See the result in View → Activity.</ToolTip>
+        </button>
+        <button>
+            <name>Run the example script</name>
+            <action>run</action>
+            <path>hello.sh</path>
+            <args>47 "Hello from ControlPanel"</args>
+            <ToolTip>Runs hello.sh from the panel’s folder with two arguments.</ToolTip>
+        </button>
+    </Tab>
+    <Tab>
+        <name>Counter</name>
+        <button>
+            <name>Increase alarm level</name>
+            <action>storeincrement</action>
+            <path>~/controlpanel-alarm-level.txt</path>
+            <ToolTip>Add one to the counter in your home folder.</ToolTip>
+        </button>
+        <button>
+            <name>Decrease alarm level</name>
+            <action>storeincrement</action>
+            <path>~/controlpanel-alarm-level.txt</path>
+            <value>-1</value>
+            <ToolTip>Subtract one from the same counter.</ToolTip>
+        </button>
+        <button>
+            <name>Add half a step</name>
+            <action>storeincrement</action>
+            <path>~/controlpanel-alarm-level.txt</path>
+            <value>0.5</value>
+        </button>
+    </Tab>
+</ControlPanel>

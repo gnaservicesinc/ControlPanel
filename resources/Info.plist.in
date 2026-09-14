@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+<key>CFBundleName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+<key>CFBundleDisplayName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+<key>CFBundleIdentifier</key><string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+<key>CFBundleVersion</key><string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+<key>CFBundleShortVersionString</key><string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+<key>CFBundleIconFile</key><string>${MACOSX_BUNDLE_ICON_FILE}</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>CFBundleDocumentTypes</key><array><dict>
+  <key>CFBundleTypeName</key><string>ControlPanel document</string>
+  <key>CFBundleTypeRole</key><string>@CP_DOCUMENT_ROLE@</string>
+  <key>LSHandlerRank</key><string>@CP_HANDLER_RANK@</string>
+  <key>LSItemContentTypes</key><array><string>com.gnaservices.controlpanel.document</string><string>public.xml</string></array>
+</dict></array>
+<key>UTExportedTypeDeclarations</key><array><dict>
+  <key>UTTypeIdentifier</key><string>com.gnaservices.controlpanel.document</string>
+  <key>UTTypeDescription</key><string>ControlPanel document</string>
+  <key>UTTypeConformsTo</key><array><string>public.xml</string></array>
+  <key>UTTypeTagSpecification</key><dict>
+    <key>public.filename-extension</key><array><string>controlpanel</string></array>
+    <key>public.mime-type</key><string>application/x-controlpanel+xml</string>
+  </dict>
+</dict></array>
+</dict></plist>
